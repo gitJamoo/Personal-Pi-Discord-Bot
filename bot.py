@@ -5,6 +5,10 @@ import platform
 import time
 import datetime
 import socket
+import asyncio
+import requests
+import speedtest
+import re
 from typing import Optional
 from discord import app_commands
 from discord.ext import commands
@@ -40,6 +44,7 @@ class MyBot(commands.Bot):
         intents.message_content = True
         super().__init__(command_prefix='!', intents=intents)
         self.start_time = None
+        self.touchpad_process = None
 
     async def setup_hook(self):
         # This syncs the commands to Discord. 
@@ -192,6 +197,117 @@ async def status_check(interaction: discord.Interaction):
     embed.set_footer(text=f"Requested by {interaction.user.display_name}")
 
     await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="public_ip", description="Get the public IP address of the bot")
+async def public_ip(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    try:
+        response = requests.get('https://api.ipify.org')
+        ip = response.text
+        await interaction.followup.send(f"🌐 Public IP: `{ip}`")
+    except Exception as e:
+        await interaction.followup.send(f"❌ Failed to get public IP: {e}")
+
+@bot.tree.command(name="speedtest", description="Run an internet speed test (Takes a few seconds)")
+async def run_speedtest(interaction: discord.Interaction):
+    await interaction.response.defer()
+    
+    def test():
+        st = speedtest.Speedtest()
+        st.get_best_server()
+        download = st.download() / 1_000_000  # Convert to Mbps
+        upload = st.upload() / 1_000_000      # Convert to Mbps
+        ping = st.results.ping
+        return download, upload, ping
+
+    try:
+        # Run blocking speedtest in a separate thread
+        loop = asyncio.get_running_loop()
+        download, upload, ping = await loop.run_in_executor(None, test)
+        
+        embed = discord.Embed(title="🚀 Internet Speed Test", color=discord.Color.blue())
+        embed.add_field(name="Download", value=f"{download:.2f} Mbps", inline=True)
+        embed.add_field(name="Upload", value=f"{upload:.2f} Mbps", inline=True)
+        embed.add_field(name="Ping", value=f"{ping:.2f} ms", inline=True)
+        
+        await interaction.followup.send(embed=embed)
+    except Exception as e:
+        await interaction.followup.send(f"❌ Speedtest failed: {e}")
+
+@bot.tree.command(name="remote_touchpad", description="Start remote-touchpad and get the connection link")
+async def remote_touchpad(interaction: discord.Interaction):
+    await interaction.response.defer()
+
+    # Check if already running
+    if bot.touchpad_process and bot.touchpad_process.returncode is None:
+        # It is running, we might not have the URL handy if we didn't store it globally, 
+        # but for simplicity let's just kill and restart or tell the user.
+        # Better: store URL in bot instance or just restart.
+        # Let's restart to ensure a fresh link/session if requested.
+        try:
+            bot.touchpad_process.terminate()
+            await bot.touchpad_process.wait()
+        except Exception:
+            pass
+    
+    try:
+        # Start the process
+        # We assume 'remote-touchpad' is in the PATH
+        bot.touchpad_process = await asyncio.create_subprocess_shell(
+            "remote-touchpad",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+
+        url = None
+        # Read stdout to find the URL
+        # We'll try to read a few lines
+        max_lines = 20
+        lines_read = 0
+        
+        while lines_read < max_lines:
+            if bot.touchpad_process.stdout.at_eof():
+                break
+                
+            line = await asyncio.wait_for(bot.touchpad_process.stdout.readline(), timeout=5.0)
+            if not line:
+                break
+                
+            decoded_line = line.decode('utf-8').strip()
+            # Look for http://IP:PORT
+            # Example output: "Open this URL in your smartphone's browser: http://192.168.1.x:8080"
+            match = re.search(r'(http://[\d\.:]+)', decoded_line)
+            if match:
+                url = match.group(1)
+                break
+            
+            lines_read += 1
+            
+        if url:
+            await interaction.followup.send(f"📱 Remote Touchpad is running!\n**Link:** {url}\n\n⚠️ **Note:** You must be on the same network (Wi-Fi) to connect.")
+        else:
+            # If we didn't find a URL, maybe it failed or output format changed
+            # Check stderr
+            stderr_data = await bot.touchpad_process.stderr.read(1024)
+            err_msg = stderr_data.decode('utf-8') if stderr_data else "Unknown error"
+            
+            # Kill it since it didn't seem to start correctly
+            try:
+                bot.touchpad_process.terminate()
+            except:
+                pass
+                
+            await interaction.followup.send(f"❌ Could not find connection URL. Output might be different or failed to start.\nError: {err_msg}")
+
+    except asyncio.TimeoutError:
+        await interaction.followup.send("❌ Timed out waiting for remote-touchpad output.")
+        if bot.touchpad_process:
+             try:
+                bot.touchpad_process.terminate()
+             except:
+                pass
+    except Exception as e:
+        await interaction.followup.send(f"❌ Failed to start remote-touchpad: {e}")
 
 if __name__ == "__main__":
     if TOKEN:

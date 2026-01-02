@@ -2,3 +2,5 @@ discord.py
 python-dotenv
 psutil
 gpiozero
+speedtest-cli
+requests
