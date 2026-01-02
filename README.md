@@ -53,5 +53,17 @@ pip install -r requirements.txt
 python3 bot.py
 ```
 
+## Commands
+
+### Slash Commands
+- `/ping`: Responds with Pong!
+- `/status_check`: Shows the current Raspberry Pi system status (CPU, RAM, Temp, etc.).
+
+### Owner Commands
+- `!sync`: Manually syncs slash commands globally. Use this if new slash commands are not appearing.
+
+## Features
+- **Status Updates**: The bot sends detailed "Online" and "Offline" status embeds to the configured `STATUS_CHANNEL_ID` channel, including host IP, OS, and uptime information.
+
 ## Hosting on Raspberry Pi (Optional)
 To keep the bot running after you close the terminal, you can use `tmux`, `screen`, or set it up as a `systemd` service for automatic restarts on boot.
